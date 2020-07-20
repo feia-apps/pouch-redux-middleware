@@ -1,7 +1,7 @@
-var jPath = require('json-path');
-var Queue = require('async-function-queue');
-var extend = require('xtend');
-var equal = require('deep-equal');
+var jPath = require("json-path");
+var Queue = require("async-function-queue");
+var extend = require("xtend");
+var equal = require("deep-equal");
 
 module.exports = createPouchMiddleware;
 
@@ -12,57 +12,61 @@ function createPouchMiddleware(_paths) {
   }
 
   if (!paths.length) {
-    throw new Error('PouchMiddleware: no paths');
+    throw new Error("PouchMiddleware: no paths");
   }
 
   var defaultSpec = {
-    path: '.',
+    path: ".",
     remove: scheduleRemove,
     insert: scheduleInsert,
-    propagateDelete,
-    propagateUpdate,
-    propagateInsert,
-    propagateBatchInsert,
-    handleResponse: function(err, data, cb) { cb(err); },
+    propagateDelete: propagateDelete,
+    propagateUpdate: propagateUpdate,
+    propagateInsert: propagateInsert,
+    propagateBatchInsert: propagateBatchInsert,
+    handleResponse: function handleResponse(err, data, cb) {
+      cb(err);
+    },
     queue: Queue(1),
     docs: {},
     actions: {
-      remove: defaultAction('remove'),
-      update: defaultAction('update'),
-      insert: defaultAction('insert'),
-      batchInsert: defaultAction('batchInsert'),
-    }
-  }
+      remove: defaultAction("remove"),
+      update: defaultAction("update"),
+      insert: defaultAction("insert"),
+      batchInsert: defaultAction("batchInsert"),
+    },
+  };
 
-  paths = paths.map(function(path) {
+  paths = paths.map(function (path) {
     var spec = extend({}, defaultSpec, path);
     spec.actions = extend({}, defaultSpec.actions, spec.actions);
     spec.docs = {};
 
-    if (! spec.db) {
-      throw new Error('path ' + path.path + ' needs a db');
+    if (!spec.db) {
+      throw new Error("path " + path.path + " needs a db");
     }
     return spec;
   });
 
   function listen(path, dispatch, initialBatchDispatched) {
-    path.db.allDocs({ include_docs: true }).then((rawAllDocs) => {
-      var allDocs = rawAllDocs.rows.map((doc) => doc.doc);
+    path.db.allDocs({ include_docs: true }).then(function (rawAllDocs) {
+      var allDocs = rawAllDocs.rows.map(function (doc) {
+        return doc.doc;
+      });
       var filteredAllDocs = allDocs;
       if (path.changeFilter) {
         filteredAllDocs = allDocs.filter(path.changeFilter);
       }
-      allDocs.forEach((doc) => {
+      allDocs.forEach(function (doc) {
         path.docs[doc._id] = doc;
       });
       path.propagateBatchInsert(filteredAllDocs, dispatch);
       initialBatchDispatched();
-      var changes = path.db.changes({
+      path.changes = path.db.changes({
         live: true,
         include_docs: true,
-        since: 'now',
+        since: "now",
       });
-      changes.on('change', change => {
+      path.changes.on("change", function (change) {
         onDbChange(path, change, dispatch);
       });
     });
@@ -71,27 +75,33 @@ function createPouchMiddleware(_paths) {
   function processNewStateForPath(path, state) {
     var docs = jPath.resolve(state, path.path);
 
+    console.log("Path change");
+
     /* istanbul ignore else */
     if (docs && docs.length) {
-      docs.forEach(function(docs) {
+      docs.forEach(function (docs) {
         var diffs = differences(path.docs, docs);
-        diffs.new.concat(diffs.updated).forEach(doc => path.insert(doc))
-        diffs.deleted.forEach(doc => path.remove(doc));
+        diffs.new.concat(diffs.updated).forEach(function (doc) {
+          return path.insert(doc);
+        });
+        diffs.deleted.forEach(function (doc) {
+          return path.remove(doc);
+        });
       });
     }
   }
 
   function write(data, responseHandler) {
-    return function(done) {
-      data.db[data.type](data.doc, function(err, resp) {
+    return function (done) {
+      data.db[data.type](data.doc, function (err, resp) {
         responseHandler(
           err,
           {
             response: resp,
             doc: data.doc,
-            type: data.type
+            type: data.type,
           },
-          function(err2) {
+          function (err2) {
             done(err2, resp);
           }
         );
@@ -101,26 +111,30 @@ function createPouchMiddleware(_paths) {
 
   function scheduleInsert(doc) {
     this.docs[doc._id] = doc;
-    this.queue.push(write(
-      {
-        type: 'put',
-        doc: doc,
-        db: this.db
-      },
-      this.handleResponse
-    ));
+    this.queue.push(
+      write(
+        {
+          type: "put",
+          doc: doc,
+          db: this.db,
+        },
+        this.handleResponse
+      )
+    );
   }
 
   function scheduleRemove(doc) {
     delete this.docs[doc._id];
-    this.queue.push(write(
-      {
-        type: 'remove',
-        doc: doc,
-        db: this.db
-      },
-      this.handleResponse
-    ));
+    this.queue.push(
+      write(
+        {
+          type: "remove",
+          doc: doc,
+          db: this.db,
+        },
+        this.handleResponse
+      )
+    );
   }
 
   function propagateDelete(doc, dispatch) {
@@ -139,62 +153,77 @@ function createPouchMiddleware(_paths) {
     dispatch(this.actions.batchInsert(docs));
   }
 
-  return function(options) {
-    paths.forEach((path) => {
-      listen(path, options.dispatch, (err) => {
-        if (path.initialBatchDispatched) {
-          path.initialBatchDispatched(err);
-        }
-      });
-    });
-
-    return function(next) {
-      return function(action) {
-        var returnValue = next(action);
-        var newState = options.getState();
-
-        paths.forEach(path => processNewStateForPath(path, newState));
-
-        return returnValue;
-      }
-    }
+  function clear() {
+    paths = [];
   }
+
+  return {
+    middleware: function (options) {
+      paths.forEach(function (path) {
+        listen(path, options.dispatch, function (err) {
+          if (path.initialBatchDispatched) {
+            path.initialBatchDispatched(err);
+          }
+        });
+      });
+
+      return function (next) {
+        return function (action) {
+          var returnValue = next(action);
+          var newState = options.getState();
+
+          console.log("called");
+
+          paths.forEach(function (path) {
+            return processNewStateForPath(path, newState);
+          });
+
+          return returnValue;
+        };
+      };
+    },
+    paths: paths,
+    clear: clear,
+  };
 }
 
 function differences(oldDocs, newDocs) {
   var result = {
     new: [],
     updated: [],
-    deleted: Object.keys(oldDocs).map(oldDocId => oldDocs[oldDocId]),
+    deleted: Object.keys(oldDocs).map(function (oldDocId) {
+      return oldDocs[oldDocId];
+    }),
   };
 
-  var checkDoc = function(newDoc) {
+  var checkDoc = function checkDoc(newDoc) {
     var id = newDoc._id;
 
     /* istanbul ignore next */
-    if (! id) {
-      warn('doc with no id');
+    if (!id) {
+      warn("doc with no id");
     }
-    result.deleted = result.deleted.filter(doc => doc._id !== id);
+    result.deleted = result.deleted.filter(function (doc) {
+      return doc._id !== id;
+    });
     var oldDoc = oldDocs[id];
-    if (! oldDoc) {
+    if (!oldDoc) {
       result.new.push(newDoc);
     } else if (!equal(oldDoc, newDoc)) {
       result.updated.push(newDoc);
     }
   };
 
-  if (Array.isArray(newDocs)){
+  if (Array.isArray(newDocs)) {
     newDocs.forEach(function (doc) {
-      checkDoc(doc)
+      checkDoc(doc);
     });
-  } else{
+  } else {
     var keys = Object.keys(newDocs);
-    for (var key in newDocs){
-      checkDoc(newDocs[key])
+    for (var key in newDocs) {
+      checkDoc(newDocs[key]);
     }
   }
-
 
   return result;
 }
@@ -202,7 +231,7 @@ function differences(oldDocs, newDocs) {
 function onDbChange(path, change, dispatch) {
   var changeDoc = change.doc;
 
-  if(path.changeFilter && (! path.changeFilter(changeDoc))) {
+  if (path.changeFilter && !path.changeFilter(changeDoc)) {
     return;
   }
 
@@ -232,7 +261,7 @@ function warn(what) {
 
 /* istanbul ignore next */
 function defaultAction(action) {
-  return function() {
-    throw new Error('no action provided for ' + action);
+  return function () {
+    throw new Error("no action provided for " + action);
   };
 }
