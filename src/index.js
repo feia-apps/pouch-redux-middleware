@@ -75,8 +75,6 @@ function createPouchMiddleware(_paths) {
   function processNewStateForPath(path, state) {
     var docs = jPath.resolve(state, path.path);
 
-    console.log("Path change");
-
     /* istanbul ignore else */
     if (docs && docs.length) {
       docs.forEach(function (docs) {
@@ -171,8 +169,6 @@ function createPouchMiddleware(_paths) {
         return function (action) {
           var returnValue = next(action);
           var newState = options.getState();
-
-          console.log("called");
 
           paths.forEach(function (path) {
             return processNewStateForPath(path, newState);
